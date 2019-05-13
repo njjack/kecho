@@ -7,6 +7,11 @@
 
 #define BUF_SIZE 4096
 
+struct work_struct_data {
+    struct work_struct work;
+    struct socket *sock;
+};
+
 static int get_request(struct socket *sock, unsigned char *buf, size_t size)
 {
     struct msghdr msg;
@@ -57,20 +62,21 @@ static int send_request(struct socket *sock, unsigned char *buf, size_t size)
     return length;
 }
 
-static int echo_server_worker(void *arg)
+static void echo_server_worker(struct work_struct *work)
 {
+    struct work_struct_data *wsdata = (struct work_struct_data *) work;
     struct socket *sock;
     unsigned char *buf;
     int res;
 
-    sock = (struct socket *) arg;
+    sock = wsdata->sock;
     allow_signal(SIGKILL);
     allow_signal(SIGTERM);
 
     buf = kmalloc(BUF_SIZE, GFP_KERNEL);
     if (!buf) {
         printk(KERN_ERR MODULE_NAME ": kmalloc error....\n");
-        return -1;
+        return;
     }
 
     while (!kthread_should_stop()) {
@@ -94,14 +100,14 @@ static int echo_server_worker(void *arg)
     sock_release(sock);
     kfree(buf);
 
-    return 0;
+    return;
 }
 
 int echo_server_daemon(void *arg)
 {
     struct echo_server_param *param = arg;
     struct socket *sock;
-    struct task_struct *thread;
+    // struct task_struct *thread;
     int error;
 
     allow_signal(SIGKILL);
@@ -118,12 +124,20 @@ int echo_server_daemon(void *arg)
         }
 
         /* start server worker */
-        thread = kthread_run(echo_server_worker, sock, MODULE_NAME);
-        if (IS_ERR(thread)) {
-            printk(KERN_ERR MODULE_NAME ": create worker thread error = %d\n",
-                   error);
-            continue;
-        }
+        /*
+                thread = kthread_run(echo_server_worker, sock, MODULE_NAME);
+                if (IS_ERR(thread)) {
+                    printk(KERN_ERR MODULE_NAME ": create worker thread error =
+           %d\n",
+                           error);
+                    continue;
+                }
+        */
+        struct work_struct_data *wdata;
+        wdata = kmalloc(sizeof(struct work_struct_data), GFP_KERNEL);
+        INIT_WORK(&wdata->work, echo_server_worker);
+        wdata->sock = sock;
+        schedule_work(&wdata->work);
     }
 
     return 0;
